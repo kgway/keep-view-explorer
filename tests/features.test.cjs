@@ -121,7 +121,7 @@ test('settings use blank defaults, two language choices, toggles and the request
   const context={module:{exports:{}},require:()=>({Plugin:class{},ItemView:class{},Modal:class{},PluginSettingTab:class{},Notice:class{},Setting}),Date,console};
   runSource(source+'\nmodule.exports=KeepViewSettings;',installModules(context));
   const settings={dateProperty:'imported',previewLengths:[90],previewMode:'source',creationTimeZone:'UTC'};
-  let saves=0;const tab=new context.module.exports({}, {settings,saveSettings(){saves++;}});
+  let saves=0;const tab=new context.module.exports({}, {settings,saveSettings(){saves++;},async setSearchCacheEnabled(value){settings.fastSearch=value;saves++;}});
   const definitions=tab.getSettingDefinitions();
   assert.equal(rows.length,0,'Indexing settings does not render controls');
   assert.equal(definitions.length,10);assert.equal(new Set(definitions.map(item=>item.name)).size,10);
@@ -131,7 +131,7 @@ test('settings use blank defaults, two language choices, toggles and the request
   assert.match(row('新規ノートの作成日時').desc,/保存先: imported/);
   assert.match(row('新規ノートの作成日時').desc,/[+-]\d{2}:\d{2}/);
   assert.deepEqual(Array.from(row('言語').dropdown.options),['en','ja']);
-  assert.deepEqual(rows.map(item=>item.name),['言語','プレビュー文字数','プレビュー表示','ノート削除時に確認する','新規ノートの作成日時','日時プロパティ','作成日時の案内','高速全文検索','検索キャッシュ','Google Keep から日時を取り込む']);
+  assert.deepEqual(rows.map(item=>item.name),['言語','プレビュー文字数','プレビュー表示','ノート削除時に確認する','新規ノートの作成日時','日時プロパティ','作成日時の案内','検索キャッシュを端末に保存','検索キャッシュ','Google Keep から日時を取り込む']);
   for(const name of ['プレビュー文字数','新規ノートの作成日時','日時プロパティ']) assert.equal(row(name).buttons.length,0);
   row('プレビュー文字数').text.change(' ');
   assert.deepEqual(Array.from(settings.previewLengths),[50,100,150,200,400]);
@@ -143,9 +143,9 @@ test('settings use blank defaults, two language choices, toggles and the request
   assert.equal(row('プレビュー表示').buttons.length,0);
   assert.equal(row('ノート削除時に確認する').toggle.value,true);
   row('ノート削除時に確認する').toggle.change(false);assert.equal(settings.confirmDelete,false);
-  assert.equal(row('高速全文検索').toggle.value,true);
-  assert.match(row('高速全文検索').desc,/暗号化はされません/);
-  row('高速全文検索').toggle.change(false);assert.equal(settings.fastSearch,false);
+  assert.equal(row('検索キャッシュを端末に保存').toggle.value,true);
+  assert.match(row('検索キャッシュを端末に保存').desc,/暗号化はされません/);
+  row('検索キャッシュを端末に保存').toggle.change(false);assert.equal(settings.fastSearch,false);
   row('新規ノートの作成日時').text.change('');
   assert.equal(settings.creationTimeZone,'');
   assert.equal(settings.previewMode,'source');assert.equal(tab.plugin.settings,settings);assert.equal(saves,5);
@@ -374,13 +374,13 @@ test('deletion defaults to confirmation and only trashes the exact reviewed Mark
 });
 
 test('fast search can be disabled without loading storage, and cache deletion pauses every open view',async()=>{
-  const context={module:{exports:{}},require:()=>({Plugin:class{},ItemView:class{},Modal:class{},PluginSettingTab:class{}}),Date,console,CompressionStream,DecompressionStream};
+  const context={module:{exports:{}},require:()=>({Plugin:class{},ItemView:class{},Modal:class{},PluginSettingTab:class{}}),Date,console,CompressionStream,DecompressionStream,indexedDB:{}};
   runSource(source,installModules(context));
   const plugin=new context.module.exports();plugin.settings={fastSearch:false};plugin.manifest={dir:'plugins/keep-view'};
   runSource('module.exports.ViewForTest=KeepView;',context);
   const changes=[],events=[],disk=new Map();
   const controllers=[0,1].map(id=>({setSearchIndex(index,options){changes.push({id,index,options});}}));
-  plugin.app={vault:{on:(event,callback)=>{events.push(event);return callback;},adapter:{exists:async path=>disk.has(path),remove:async path=>disk.delete(path)}},workspace:{getLeavesOfType:()=>controllers.map(controller=>({view:Object.assign(Object.create(context.module.exports.ViewForTest.prototype),{controller})}))}};
+  plugin.app={loadLocalStorage:()=>null,vault:{on:(event,callback)=>{events.push(event);return callback;},adapter:{exists:async path=>disk.has(path)||[...disk.keys()].some(key=>key.startsWith(path+'/')),list:async path=>({files:[...disk.keys()].filter(key=>key.startsWith(path+'/')),folders:[]}),remove:async path=>disk.delete(path)}},workspace:{getLeavesOfType:()=>controllers.map(controller=>({view:Object.assign(Object.create(context.module.exports.ViewForTest.prototype),{controller})}))}};
   plugin.registerEvent=()=>{};
   assert.equal(plugin.getSearchIndex(),null);assert.equal(plugin.searchIndex,null);assert.equal(events.length,0);
   plugin.settings.fastSearch=true;const index=plugin.getSearchIndex();assert.ok(index);assert.equal(events.length,4);
@@ -390,4 +390,21 @@ test('fast search can be disabled without loading storage, and cache deletion pa
   assert.equal(changes.length,4);assert.ok(changes.slice(0,2).every(change=>change.index===null && change.options.pause));
   assert.ok(changes.slice(2).every(change=>change.index===index));
   plugin.settings.fastSearch=false;assert.equal(plugin.getSearchIndex(),null);assert.equal(events.length,4);
+});
+
+test('turning persistence off saves the choice and waits for deletion; enabling it does not build a cache',async()=>{
+  const notices=[];
+  const context={module:{exports:{}},require:()=>({Plugin:class{},ItemView:class{},Modal:class{},PluginSettingTab:class{},Notice:class{constructor(text){notices.push(text);}}}),Date,console};
+  runSource(source,installModules(context));
+  const plugin=new context.module.exports();plugin.settings={fastSearch:true};
+  let saves=0,clears=0,finish;
+  plugin.saveSettings=()=>saves++;
+  plugin.clearSearchCache=()=>{clears++;return new Promise(resolve=>finish=resolve);};
+  const disabling=plugin.setSearchCacheEnabled(false);
+  assert.equal(plugin.settings.fastSearch,false);assert.equal(saves,1);assert.equal(clears,1);assert.equal(notices.length,0);
+  finish();await disabling;assert.equal(notices.length,1);
+  await plugin.setSearchCacheEnabled(true);assert.equal(plugin.settings.fastSearch,true);assert.equal(clears,1);
+  plugin.clearSearchCache=async()=>{throw Error('blocked');};
+  await plugin.setSearchCacheEnabled(false);assert.equal(plugin.settings.fastSearch,false);
+  assert.match(notices.at(-1),/できません/);
 });

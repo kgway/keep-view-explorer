@@ -26,13 +26,13 @@ class CardSearch {
   clear() {this.cancel();this.cache.clear();this.query='';}
   dispose() {this.clear();}
 
-  search(value: string,files: TFile[],{onProgress=()=>{}}: {onProgress?:ProgressCallback}={}): Promise<SearchResult> {
+  search(value: string,files: TFile[],{onProgress=()=>{},updateCache=false}: {onProgress?:ProgressCallback,updateCache?:boolean}={}): Promise<SearchResult> {
     const query=normalizeSearch(value.trim()),generation=++this.generation;
     const cancelled=()=>generation!==this.generation;
     const work=async()=>{
       const matches=new Set( ([] as string[])),settled=new Set( ([] as string[])),errors= ([] as string[]);
       if(cancelled()) return {matches,errors,cancelled:true};
-      if(this.index) return this.index.search(query,files,{cancelled,onProgress});
+      if(this.index && updateCache) return this.index.search(query,files,{cancelled,onProgress});
       if(query!==this.query) {this.query=query;this.cache.clear();}
       let next=0,completed=0;
       await Promise.all(Array.from({length:Math.min(4,files.length)},async()=>{

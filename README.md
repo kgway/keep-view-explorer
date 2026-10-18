@@ -70,9 +70,17 @@ For migration from Google Keep, first import Markdown notes with Obsidian's [Imp
 
 ## Data and privacy
 
-Keep View Explorer adds no accounts, advertising or telemetry. It does not send notes or search queries to external services and does not access files outside the vault.
+On affected Android versions, note-property date icons may overlap the text. The plugin's date-range fields include a scoped fix; an optional property-field workaround is described in [Android date fields](docs/mobile-date-compatibility.md).
 
-Settings and view conditions are saved in the plugin's `data.json`. Optional fast search stores compressed, **unencrypted note text** and update metadata in `search-cache-v1` inside the installed plugin directory. Only candidate notes requested by a search are indexed. Cache storage uses up to eight files and bounded memory; changed or damaged entries are rebuilt from the notes. Disable fast search to search notes directly, or use the cache deletion setting to remove stored cache data. Original notes are preserved. Any synchronization of the plugin folder follows your vault and device configuration.
+Keep View Explorer adds no accounts, advertising or telemetry. It does not send notes or search queries to external services. Note operations use the Obsidian vault API; the optional search cache uses device-local IndexedDB.
+
+Settings and view conditions are saved in the plugin's `data.json`. **Save search cache on this device** is enabled by default. It stores compressed, **unencrypted note text**, vault-relative paths and update metadata in a dedicated, vault-specific IndexedDB database on each device, outside normal vault-folder sync. The database name uses a random identifier stored through Obsidian's vault-local storage API, without the vault name or absolute path. This storage is not an encryption or isolation boundary against other plugins.
+
+Only pressing **Search** (or submitting the search form) updates the persistent cache. Startup, note events, sorting and filter changes do not update it. Only search candidates are indexed; the next explicit search also removes cached text for deleted or renamed paths, including paths outside the current filters. Until then, that old text can remain stored. Cache payload is limited to eight compressed buckets of up to 8 MiB each; path metadata and database overhead are additional. Memory retention is bounded separately.
+
+Turning this setting off deletes saved search-cache data on the device where you perform that action and uses direct note scanning. **Delete search cache** removes stored and retained cache data without changing notes or settings, and leaves rebuilding to the next explicit search. A setting change received through sync does not erase another device's database at startup; clear cache explicitly on each device when needed. If IndexedDB is unavailable or a write fails, searches still return source-note results; no cache files are written into the vault as a fallback. Uninstalling the plugin is not a substitute for clearing its device-local cache first.
+
+Old `search-cache-v1` files are no longer read. Recognized old bucket files are removed at the next explicit cached search, when turning cache storage off, or through **Delete search cache**. Other files are preserved. Each device must handle its local database; old files on synced devices and in backups may remain until those copies are cleaned up.
 
 Markdown previews use Obsidian's renderer. External images or other remote resources referenced by your notes may cause network requests when rendered.
 

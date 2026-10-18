@@ -1,7 +1,7 @@
 {
   "id": "keep-view",
   "name": "Keep View Explorer",
-  "version": "1.43.11",
+  "version": "1.44.3",
   "minAppVersion": "1.8.7",
   "description": "Browse, filter, and organize notes in a Google Keep-style card view. Narrow results with Boolean tag queries, folders, dates, and full-text search, then move or retag notes in bulk.",
   "author": "kgway",

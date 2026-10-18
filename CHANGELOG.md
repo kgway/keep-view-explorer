@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.44.3 — native date layout
+
+- Keep the Android calendar indicator in normal layout, without a reserved slot when the host hides it.
+- Retain the standard icon-to-text gap with or without a separately enabled snippet.
+- Move the optional general-purpose Android snippet to its own repository and release cycle.
+
+## 1.44.2 — consistent Android date spacing
+
+- Match the native date icon gap to the standard property-label spacing, including larger text.
+- Extend the optional snippet to editable Android native date and datetime fields, including older plugin versions.
+- Use explicit icon geometry and replacement padding so applying both fixes does not stack their spacing.
+
+## 1.44.1 — Android date fields
+
+- Reserve leading space for the native calendar icon in Android date-range inputs.
+- Add a separately enabled CSS snippet for the corresponding Obsidian note-property date and datetime issue.
+- Check native date text and calendar-icon geometry across input values, locales and viewport widths.
+
+## 1.44.0 — device-local search cache
+
+- Store compressed search bodies in a dedicated IndexedDB database for each device and vault, outside normal vault-folder sync.
+- Update persisted cache only on explicit search submission, pruning deleted and renamed paths across all cached buckets.
+- Delete saved cache when persistence is turned off, and retain direct note scanning when storage is unavailable.
+- Remove recognized legacy cache files on explicit search or cache deletion, without reading or replacing note files.
+- Bound compressed cache payloads and commit bucket content and path metadata atomically.
+
 ## 1.43.11 — mobile toolbar compatibility
 
 - Use the grid gap shorthand for narrow-screen toolbar groups while preserving their spacing.

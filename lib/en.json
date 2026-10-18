@@ -175,5 +175,8 @@
   "作成日時の案内": "Creation date guidance",
   "作成日時について": "About creation dates",
   "日時プロパティが未設定・無効のとき、起動中に一度だけ案内します。オフにすると、案内用の追加確認も省きます。移行ツールは引き続き手動で開けます。": "Show guidance once per app session when date properties are missing or invalid. Turning this off also skips the extra guidance checks. The import tool remains available manually.",
-  "閉じる": "Close"
+  "閉じる": "Close",
+  "検索キャッシュを端末に保存": "Save search cache on this device",
+  "検索実行時だけ、この端末の IndexedDB に本文を圧縮して保存します。Vault 同期の対象外で、暗号化はされません。オフにすると保存済みキャッシュも削除します。": "Only when you run a search, save compressed note text in IndexedDB on this device. The cache is outside vault sync and is not encrypted. Turning this off also deletes the saved cache.",
+  "この端末の検索キャッシュと旧キャッシュファイルを削除します。ノートや設定は残り、検索ボタンを押すまで再作成しません。": "Delete the search cache on this device and legacy cache files. Notes and settings are kept. The cache is not rebuilt until you press Search."
 }

@@ -163,6 +163,7 @@ const cardSearch=new CardSearch(app,{index:searchIndex,yieldTask:()=>new Promise
 
 let searchState: SearchState={key:null,ready:true,matches:new Set(),errors:[]};
 let searchActivated=false;
+let updateSearchCache=false;
 let deferTreeCards=false;let treeCardTimer: number|null=null;
 const treeCardQueue= ([] as (()=>boolean)[]);
 
@@ -1521,7 +1522,8 @@ const ensureSearch=()=>{
   };
   const slowTimer=setTimeout(()=>{run.slow=true;updateProgress();},600);
   let prefix=0,released=0;
-  cardSearch.search(query,files,{onProgress:(completed,total,partial)=>{
+  const updateCache=updateSearchCache;updateSearchCache=false;
+  cardSearch.search(query,files,{updateCache,onProgress:(completed,total,partial)=>{
     if(disposed || searchState!==run) return;
     run.completed=completed;updateProgress();
     if(partial) {
@@ -1789,7 +1791,7 @@ const render = () => {
   searchButton.onclick=()=>{
     searchModal?.close();
     searchModal=new TextSearchModal(app,S.textQuery,(value)=>{
-      pushUndo();S.textQuery=value;S.limit=PAGE_SIZE;searchActivated=true;searchState.key=null;render();
+      pushUndo();S.textQuery=value;S.limit=PAGE_SIZE;searchActivated=true;updateSearchCache=!!value;searchState.key=null;render();
     });
     searchModal.open();
   };
@@ -2057,7 +2059,7 @@ const render = () => {
 render();
 return {
 
-  setSearchIndex(index: SearchIndex|null,{pause=false}: {pause?:boolean}={}) {if(cardSearch.index===index && !pause) return;cardSearch.clear();cardSearch.index=index;if(pause) searchActivated=false;searchState.key=null;forceRefresh=true;refreshLater();},
+  setSearchIndex(index: SearchIndex|null,{pause=false}: {pause?:boolean}={}) {if(cardSearch.index===index && !pause) return;cardSearch.clear();cardSearch.index=index;if(pause) {searchActivated=false;updateSearchCache=false;}searchState.key=null;forceRefresh=true;refreshLater();},
 
   refresh(file?: TAbstractFile) { if(file?.path) {forceRefresh=file.path.toLowerCase().endsWith('.md') || forceRefresh;cardSearch.invalidate(file.path);if(searchState.files?.has(file.path)) {cardSearch.cancel();searchState.key=null;}} revision++; pagesCache=null; S.tagCache = null; refreshLater(); },
   refreshSettings() {forceRefresh=true;revision++;pagesCache=null;S.tagCache=null;refreshLater();},
@@ -2216,7 +2218,7 @@ class CacheDeleteModal extends KeepViewModal {
     this.prepareSurface();
     const root=this.contentEl;root.addClass('kv-cache-delete-modal');
     root.createEl('h2',{text:msg('全文検索のキャッシュを削除しますか？')});
-    root.createEl('p',{text:msg('ノートや設定は削除されません。次に検索するとキャッシュを作り直します。')});
+    root.createEl('p',{text:msg('この端末の検索キャッシュと旧キャッシュファイルを削除します。ノートや設定は残り、検索ボタンを押すまで再作成しません。')});
     const actions=root.createDiv({cls:'kv-modal-actions'});
     const cancel=actions.createEl('button',{text:msg('キャンセル')});cancel.onclick=()=>this.close();
     const confirm=actions.createEl('button',{text:msg('削除する')});
@@ -2374,8 +2376,8 @@ class KeepViewSettings extends PluginSettingTab {
         });
       });}},
     {name:msg("作成日時の案内"),desc:msg("日時プロパティが未設定・無効のとき、起動中に一度だけ案内します。オフにすると、案内用の追加確認も省きます。移行ツールは引き続き手動で開けます。"),render:(setting)=>{setting.addToggle((toggle)=>toggle.setValue(this.plugin.settings.showDateGuidance!==false).onChange((value)=>{this.plugin.settings.showDateGuidance=value;if(value) this.plugin.dateGuidanceShown?.clear();this.plugin.saveSettings();}));}},
-    {name:msg("高速全文検索"),desc:msg("ノート本文を圧縮して検索キャッシュに保存します。暗号化はされません。"),render:(setting)=>{setting.addToggle((toggle)=>toggle.setValue(this.plugin.settings.fastSearch!==false)
-        .onChange((value)=>{this.plugin.settings.fastSearch=value;this.plugin.saveSettings();}))}},
+    {name:msg("検索キャッシュを端末に保存"),desc:msg("検索実行時だけ、この端末の IndexedDB に本文を圧縮して保存します。Vault 同期の対象外で、暗号化はされません。オフにすると保存済みキャッシュも削除します。"),render:(setting)=>{setting.addToggle((toggle)=>toggle.setValue(this.plugin.settings.fastSearch!==false)
+        .onChange(async(value)=>{await this.plugin.setSearchCacheEnabled(value);}))}},
     {name:msg("検索キャッシュ"),render:(setting)=>{setting.addButton((button)=>button.setButtonText(msg("削除する")).onClick(()=>this.plugin.confirmClearSearchCache()))}},
     {name:msg("Google Keep から日時を取り込む"),desc:msg("Importer などで Vault に取り込んだ Markdown ノートのファイル名から日時を取り込みます。対象フォルダと変換内容を確認してから適用できます。"),render:(setting)=>{setting.addButton((button)=>button.setButtonText(msg("移行ツールを開く")).onClick(()=>this.plugin.openMigration()))}},
     ];
@@ -2507,13 +2509,21 @@ class KeepViewPlugin extends Plugin {
       (leaf.view instanceof KeepView?leaf.view.controller:null)?.refreshSettings();
     }
   }
+  async setSearchCacheEnabled(value:boolean) {
+    this.settings.fastSearch=value;this.saveSettings();
+    if(!value) {
+      try {await this.clearSearchCache();new Notice(msg("検索キャッシュを削除しました"));}
+      catch {new Notice(msg("検索キャッシュを削除できませんでした"));}
+    }
+  }
   async clearSearchCache() {
     const controllers=this.app.workspace.getLeavesOfType(VIEW_TYPE).map((leaf)=>(leaf.view instanceof KeepView?leaf.view.controller:null)).filter((controller): controller is NonNullable<typeof controller>=>controller!==null);
     for(const controller of controllers) controller.setSearchIndex(null,{pause:true});
     const directory=this.manifest.dir || `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    const temporary=!this.searchIndex;
     const index=this.searchIndex || new SearchIndex(this.app,`${directory}/search-cache-v1`);
     try {await index.clear();}
-    finally {for(const controller of controllers) controller.setSearchIndex(this.getSearchIndex());}
+    finally {if(temporary) index.close();for(const controller of controllers) controller.setSearchIndex(this.getSearchIndex());}
   }
   confirmClearSearchCache() {
     this.cacheDeleteModal?.close();
@@ -2526,6 +2536,6 @@ class KeepViewPlugin extends Plugin {
     if (!leaf) { leaf = this.app.workspace.getLeaf('tab'); await leaf.setViewState({type:VIEW_TYPE, active:true}); }
     await this.app.workspace.revealLeaf(leaf);
   }
-  onunload() { this.migrationModal?.close();this.cacheDeleteModal?.close(); }
+  onunload() { this.migrationModal?.close();this.cacheDeleteModal?.close();this.searchIndex?.close(); }
 }
 export default KeepViewPlugin;
