@@ -1,5 +1,10 @@
 # Keep View Explorer
 
+## Changes in 1.44.4
+
+- Resolve the newer-TypeScript review warning about an unnecessary assertion in search-cache path validation.
+- Runtime JavaScript and stylesheet are unchanged from 1.44.3; search caching, Android date layout and older-device text selection keep their existing behavior.
+
 ## Changes in 1.44.3
 
 - Prevent native calendar icons from overlapping text in Android date-range inputs, without requiring a separate CSS snippet.

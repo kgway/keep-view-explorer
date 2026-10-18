@@ -98,8 +98,8 @@ export class IndexedDBSearchStorage implements SearchStorage {
     const db=await this.open();
     const value=await requestValue(db.transaction('paths','readonly').objectStore('paths').get(id));
     if(value===undefined) return [];
-    if(!Array.isArray(value) || !value.every((path:unknown)=>typeof path==='string')) throw new Error('Invalid search cache paths');
-    return value as string[];
+    if(!Array.isArray(value) || !value.every((path:unknown):path is string=>typeof path==='string')) throw new Error('Invalid search cache paths');
+    return value;
   }
 
   async write(id:number,bytes:Uint8Array,paths:string[]):Promise<void> {
