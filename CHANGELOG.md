@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.44.4 — cache type-check compatibility
+
+- Validate stored path arrays with an explicit type predicate instead of an unnecessary assertion under newer TypeScript versions.
+- Retain the same runtime JavaScript and stylesheet as 1.44.3.
+
 ## 1.44.3 — native date layout
 
 - Keep the Android calendar indicator in normal layout, without a reserved slot when the host hides it.

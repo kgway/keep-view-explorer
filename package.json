@@ -1,6 +1,6 @@
 {
   "name": "obsidian-keep-view",
-  "version": "1.44.3",
+  "version": "1.44.4",
   "private": true,
   "description": "Browse, filter, and organize notes in a Google Keep-style card view. Narrow results with Boolean tag queries, folders, dates, and full-text search, then move or retag notes in bulk.",
   "scripts": {
