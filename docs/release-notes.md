@@ -1,5 +1,18 @@
 # Keep View Explorer
 
+## Changes in 1.44.3
+
+- Prevent native calendar icons from overlapping text in Android date-range inputs, without requiring a separate CSS snippet.
+- Keep the icon in normal layout with the standard gap, including when an optional snippet is enabled. A host-hidden icon leaves no reserved icon slot.
+- Maintain the optional general-purpose [Android date fix](https://github.com/kgway/obsidian-android-date-fix) separately from the plugin.
+
+- Keep the optional search cache in device- and vault-specific IndexedDB, outside normal vault-folder sync.
+- Update saved cache only when Search is submitted; note edits, filter changes and sorting do not write it.
+- Remove cached text for deleted or renamed paths on the next explicit search, including paths outside the current filters.
+- Turning persistence off also deletes saved cache. Manual deletion leaves notes and settings intact and waits for the next explicit search to rebuild.
+- Search notes directly when storage is unavailable, without writing fallback cache files into the vault. Cached note text remains compressed and unencrypted.
+- Discard recognized old `search-cache-v1` files on explicit cached search or cache deletion.
+
 ## Changes in 1.43.11
 
 - Replace the narrow-screen toolbar's `column-gap` declaration with the equivalent grid `gap` shorthand to resolve the remaining CSS compatibility warning.

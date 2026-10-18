@@ -13,6 +13,8 @@ const screenshots=path.join(root,'.artifacts','ui');fs.mkdirSync(screenshots,{re
 (async () => {
   const browser = await chromium.launch({headless:true, ...(process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
   try {
+    await require('./date-input-browser.cjs').testDateInputs(browser);
+    await require('./search-storage-browser.cjs').testSearchStorage(browser);
     const page = await browser.newPage({viewport:{width:1200,height:850},hasTouch:true});
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.setContent('<html><body class="workspace-leaf"><div class="workspace-leaf-content" data-type="keep-view"><div id="view" class="view-content keep-view-content" style="height:810px"></div></div></body></html>');
@@ -804,12 +806,13 @@ const screenshots=path.join(root,'.artifacts','ui');fs.mkdirSync(screenshots,{re
     assert.equal(await page.evaluate(()=>liveComponents),0,'Deletion previews release render components');
     await page.evaluate(()=>{
       const files=['Notes/one.md','Notes/two.md','Other/three.md'].map((path,i)=>({path,basename:path.split('/').pop().slice(0,-3),parent:{path:path.split('/')[0]},stat:{mtime:1,size:30,ctime:1},i}));
-      const disk=new Map();window.indexNoteReads=0;
+      const disk=new Map(),paths=new Map();window.indexNoteReads=0;window.indexWrites=0;
+      window.indexStorage={read:async id=>disk.get(id)||null,paths:async id=>paths.get(id)||[],write:async(id,bytes,names)=>{indexWrites++;disk.set(id,bytes);paths.set(id,names);},clear:async()=>{disk.clear();paths.clear();},close(){}};
       window.indexApp={vault:{getMarkdownFiles:()=>files,getAbstractFileByPath:path=>files.find(file=>file.path===path),cachedRead:async file=>{indexNoteReads++;return ['買い物 needle','別の本文','その他'][file.i];},adapter:{exists:async path=>disk.has(path),mkdir:async path=>disk.set(path,null),readBinary:async path=>disk.get(path),writeBinary:async(path,data)=>disk.set(path,data)}},metadataCache:{getFileCache:()=>({tags:[],frontmatter:{created:new Date().toISOString()}}),getFirstLinkpathDest:()=>null},workspace:{getLeaf:()=>({openFile(){}})}};
       window.indexSaved={textQuery:'needle'};
       window.mountIndexed=()=>{
         document.getElementById('view').empty();
-        window.indexController=mountKeepView(indexApp,document.getElementById('view').createDiv(),indexSaved,state=>window.indexSaved=state,currentSettings,new SearchIndex(indexApp,'cache'));
+        window.indexController=mountKeepView(indexApp,document.getElementById('view').createDiv(),indexSaved,state=>window.indexSaved=state,currentSettings,new SearchIndex(indexApp,'cache',{storage:indexStorage}));
       };
       mountIndexed();
     });
@@ -822,6 +825,12 @@ const screenshots=path.join(root,'.artifacts','ui');fs.mkdirSync(screenshots,{re
     assert.equal(await page.evaluate(()=>indexNoteReads),0,'Reopened production index searches saved bodies without note reads');
     await search('買');
     assert.equal(await page.locator('.kv-card').count(),1);
+    const writesBeforeRefresh=await page.evaluate(()=>indexWrites);
+    await page.evaluate(()=>indexController.refresh(indexApp.vault.getMarkdownFiles()[0]));
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(()=>indexWrites),writesBeforeRefresh,'Note events do not update saved search bodies');
+    await search('買');
+    assert.ok(await page.evaluate(before=>indexWrites>before,writesBeforeRefresh),'An explicit repeat search commits invalidated bodies');
     await page.getByRole('button',{name:'ツリー表示',exact:true}).click();
     await page.addStyleTag({content:'body.is-mobile button { border: none; }'});
     await page.evaluate(()=>document.body.classList.add('is-mobile'));
@@ -890,6 +899,8 @@ const screenshots=path.join(root,'.artifacts','ui');fs.mkdirSync(screenshots,{re
     assert.deepEqual(await page.locator('.kv-card').evaluateAll(cards=>cards.slice(0,2).map(card=>({path:card.dataset.path,left:card.style.left,top:card.style.top,y:card.getBoundingClientRect().top}))),partialPositions,'Incremental positions match an ordinary completed render');
     await page.evaluate(()=>{window.advanceSearch=null;});
     await page.getByRole('button',{name:'ツリー表示',exact:true}).click();
+    await page.getByRole('button',{name:'全文検索',exact:true}).click();
+    await page.getByRole('button',{name:'検索',exact:true}).click();
     await page.waitForFunction(()=>typeof advanceSearch==='function');
     await page.evaluate(()=>advanceSearch([0]));
     await page.waitForTimeout(80);

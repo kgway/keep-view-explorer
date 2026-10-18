@@ -10,7 +10,9 @@ const app={vault:{getAbstractFileByPath:path=>byPath.get(path),cachedRead:async 
 const {SearchIndex}=require('../tests/load-source.cjs').loadSource('../lib/search-index');
 const disk=new Map();let loads=0,writes=0;
 app.vault.adapter={exists:async path=>disk.has(path),mkdir:async path=>disk.set(path,null),readBinary:async path=>{loads++;return disk.get(path);},writeBinary:async(path,data)=>{writes++;disk.set(path,data);}};
-const open=()=>new SearchIndex(app,'cache',{yieldTask:()=>new Promise(resolve=>setImmediate(resolve))});
+const paths=new Map();
+const storage={read:async id=>{loads++;const bytes=disk.get(id);return bytes?new Uint8Array(bytes):null;},paths:async id=>paths.get(id)||[],write:async(id,bytes,names)=>{writes++;disk.set(id,bytes);paths.set(id,names);},clear:async()=>{disk.clear();paths.clear();},close(){}};
+const open=()=>new SearchIndex(app,'cache',{storage,yieldTask:()=>new Promise(resolve=>setImmediate(resolve))});
 (async()=>{
   const scenarios=[],queries=['特殊検索語はるかぜ','会','会議','確認123','存在しない語句'];
   const index=open();

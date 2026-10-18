@@ -2,6 +2,8 @@ import type {App, TFile} from "obsidian";
 import type {Bucket, CacheEntry, CachedMatch, ProgressCallback, SearchResult} from "./types";
 
 import {encodeBucket,decodeBucket} from "./search-codec";
+import {IndexedDBSearchStorage} from './search-storage';
+import type {SearchStorage} from './search-storage';
 const BUCKETS=8,LEGACY_BUCKETS=64;
 
 const normalize=(value: unknown)=>String(value).normalize('NFC').toLowerCase();
@@ -25,18 +27,25 @@ class SearchIndex {
   declare tail: Promise<unknown>;
   declare query: string;
   declare results: Map<string, CachedMatch>;
-  declare migrated: boolean;
+  private storage:SearchStorage;
+  private storageAvailable=true;
+  private closed=false;
 
-  static supported() {return typeof CompressionStream!=='undefined' && typeof DecompressionStream!=='undefined';}
+  static supported() {return IndexedDBSearchStorage.supported() && typeof CompressionStream!=='undefined' && typeof DecompressionStream!=='undefined';}
 
-  constructor(app: App,directory: string,{yieldTask=()=>new Promise((resolve)=>(typeof window==='undefined'?setTimeout:window.setTimeout)(resolve,0)),memoryLimit=12*1024*1024}: {yieldTask?:()=>Promise<void>,memoryLimit?:number}={}) {
+  constructor(app: App,directory: string,{yieldTask=()=>new Promise((resolve)=>(typeof window==='undefined'?setTimeout:window.setTimeout)(resolve,0)),memoryLimit=12*1024*1024,storage=new IndexedDBSearchStorage(app)}: {yieldTask?:()=>Promise<void>,memoryLimit?:number,storage?:SearchStorage}={}) {
     this.app=app;this.directory=directory;this.yieldTask=yieldTask;this.memoryLimit=memoryLimit;
     this.buckets= (new Map() as Map<number,Bucket>);this.invalidated= (new Map() as Map<string,number>);this.revision=0;this.tail= (Promise.resolve());
     this.query='';this.results= (new Map() as Map<string,CachedMatch>);
-    this.migrated=false;
+    this.storage=storage;
   }
 
   invalidate(path: string) {this.invalidated.set(path,++this.revision);this.results.delete(path);}
+
+  private present(path:string) {
+    const file=this.app.vault.getAbstractFileByPath(path);
+    return !!file && 'stat' in file;
+  }
 
   search(query: string,files: TFile[],{cancelled=()=>false,onProgress=()=>{}}: {cancelled?:()=>boolean,onProgress?:ProgressCallback}={}) {
     const result=this.tail.then(()=>this.run(query,files,{cancelled,onProgress}));
@@ -45,17 +54,22 @@ class SearchIndex {
   }
   clear() {
     const work=this.tail.then(async()=>{
-      const adapter=this.app.vault.adapter;
-      try {
-        for(let id=0;id<LEGACY_BUCKETS;id++) {
-          const path=`${this.directory}/${id}.gz`;
-          if(await adapter.exists(path)) await adapter.remove(path);
-        }
-        for(let id=0;id<BUCKETS;id++) {const path=`${this.directory}/bucket-${id}.gz`;if(await adapter.exists(path)) await adapter.remove(path);}
-      } finally {this.buckets.clear();this.invalidated.clear();this.results.clear();this.query='';this.migrated=false;}
+      const outcomes=await Promise.allSettled([this.storage.clear(),this.removeLegacy()]);
+      this.buckets.clear();this.invalidated.clear();this.results.clear();this.query='';
+      for(const outcome of outcomes) if(outcome.status==='rejected') throw outcome.reason as unknown;
     });
     this.tail=work.catch(()=>{});
     return work;
+  }
+
+  close() {this.closed=true;this.storage.close();this.buckets.clear();this.results.clear();this.invalidated.clear();}
+
+  private async removeLegacy() {
+    const adapter=this.app.vault.adapter;
+    if(!await adapter.exists(this.directory)) return;
+    const names=new Set([...Array.from({length:LEGACY_BUCKETS},(_,id)=>`${this.directory}/${id}.gz`),...Array.from({length:BUCKETS},(_,id)=>`${this.directory}/bucket-${id}.gz`)]);
+    const listing=await adapter.list(this.directory);
+    for(const path of listing.files) if(names.has(path)) await adapter.remove(path);
   }
 
   async load(id: number): Promise<Bucket> {
@@ -63,10 +77,11 @@ class SearchIndex {
       const bucket=this.buckets.get(id)!;this.buckets.delete(id);this.buckets.set(id,bucket);return bucket;
     }
     const bucket= ({entries:new Map(),dirty:false,bytes:0} as Bucket);
+    let bytes:Uint8Array|null=null;
+    try {if(this.storageAvailable) bytes=await this.storage.read(id);} catch {this.storageAvailable=false;}
     try {
-      const adapter=this.app.vault.adapter,path=`${this.directory}/bucket-${id}.gz`;
-      if(await adapter.exists(path)) {
-        const data=await decodeBucket(new Uint8Array(await adapter.readBinary(path)));
+      if(bytes) {
+        const data=await decodeBucket(bytes);
         bucket.dirty=data.legacy;
         for(const [path,entry] of data.entries) {
           if(typeof path!=='string' || bucketFor(path)!==id || typeof entry.text!=='string' || !Number.isFinite(entry.mtime) || !Number.isFinite(entry.size)) throw Error('Invalid search cache');
@@ -74,37 +89,22 @@ class SearchIndex {
           bucket.entries.set(path,{mtime,size,text,epoch:0});bucket.bytes+=text.length*2+path.length*2+128;
         }
       }
-    } catch {bucket.entries.clear();bucket.bytes=0;}
+    } catch {bucket.entries.clear();bucket.bytes=0;bucket.dirty=true;}
     this.buckets.set(id,bucket);return bucket;
   }
 
-  async migrate(cancelled: ()=>boolean) {
-    if(this.migrated) return;
-    const adapter=this.app.vault.adapter;
+  async prune(cancelled: ()=>boolean) {
     for(let id=0;id<BUCKETS;id++) {
       if(cancelled()) return;
-      const old=[];
-      for(let legacy=id;legacy<LEGACY_BUCKETS;legacy+=BUCKETS) {const path=`${this.directory}/${legacy}.gz`;if(await adapter.exists(path)) old.push(path);}
-      if(!old.length) continue;
+      const paths=await this.storage.paths(id);
+      if(!paths.some(path=>!this.present(path))) continue;
       const bucket=await this.load(id);
-      for(const path of old) {
-        const legacy=Number(path.split('/').pop()!.split('.')[0]);
-        let data;
-        try {data=await decodeBucket(new Uint8Array(await adapter.readBinary(path)));} catch {continue;}
-        for(const [note,entry] of data.entries) {
-          if(hash(note)%LEGACY_BUCKETS!==legacy || bucketFor(note)!==id) continue;
-          if(!bucket.entries.has(note) && this.app.vault.getAbstractFileByPath(note)) bucket.entries.set(note,{...entry,epoch:0});
-        }
-        await this.yieldTask();
-      }
+      for(const path of bucket.entries.keys()) if(!this.present(path)) {bucket.entries.delete(path);this.results.delete(path);this.invalidated.delete(path);}
       bucket.dirty=true;
       await this.save(id,bucket);
-      // Remove source shards only after their replacement has been written.
-      for(const path of old) await adapter.remove(path);
       bucket.bytes=[...bucket.entries].reduce((sum,[path,entry])=>sum+entry.text.length*2+path.length*2+128,0);
       this.trim();
     }
-    this.migrated=true;
   }
   trim() {
     let bytes=[...this.buckets.values()].reduce((sum,bucket)=>sum+bucket.bytes,0);
@@ -118,11 +118,10 @@ class SearchIndex {
     if(!bucket.dirty) return;
     const entries=[...bucket.entries].map(([path,{epoch,...entry}])=> ([path,entry] as [string,CacheEntry]));
     const epochs=new Map([...bucket.entries].map(([path,entry])=>[path,entry.epoch]));
-    const adapter=this.app.vault.adapter;
-    if(!await adapter.exists(this.directory)) await adapter.mkdir(this.directory);
+    if(!this.storageAvailable || this.closed) throw new Error('Search cache unavailable');
     await this.yieldTask();
     const compressed=await encodeBucket(entries);
-    await adapter.writeBinary(`${this.directory}/bucket-${id}.gz`,compressed.buffer.slice(compressed.byteOffset,compressed.byteOffset+compressed.byteLength));
+    await this.storage.write(id,compressed,entries.map(([path])=>path));
     for(const [path,epoch] of epochs) if((this.invalidated.get(path)||0)===epoch) {
       this.invalidated.delete(path);bucket.entries.get(path)!.epoch=0;
     }
@@ -131,7 +130,10 @@ class SearchIndex {
 
   async run(query: string,files: TFile[],{cancelled,onProgress}: {cancelled:()=>boolean,onProgress:ProgressCallback}): Promise<SearchResult> {
     const matches=new Set( ([] as string[])),settled=new Set( ([] as string[])),errors= ([] as string[]),groups= (new Map() as Map<number,TFile[]>);let completed=0,storageError=false;
-    try {await this.migrate(cancelled);} catch {storageError=true;}
+    if(this.closed || cancelled()) return {matches,errors,cancelled:true};
+    this.storageAvailable=true;
+    try {await this.prune(cancelled);} catch {this.storageAvailable=false;storageError=true;}
+    try {if(this.storageAvailable && !cancelled()) await this.removeLegacy();} catch {storageError=true;}
     const report=()=>{if(!cancelled()) onProgress(completed,files.length,{matches,settled});};
     if(query!==this.query) {this.query=query;this.results.clear();}
     for(const file of files) {
@@ -150,7 +152,7 @@ class SearchIndex {
     for(const [id,candidates] of groups) {
       if(cancelled()) break;
       const bucket=await this.load(id);
-      for(const path of bucket.entries.keys()) if(!this.app.vault.getAbstractFileByPath(path)) {bucket.entries.delete(path);this.invalidated.delete(path);bucket.dirty=true;}
+      for(const path of bucket.entries.keys()) if(!this.present(path)) {bucket.entries.delete(path);this.invalidated.delete(path);bucket.dirty=true;}
       for(const file of candidates) {
         if(cancelled()) break;
         const path=file.path,mtime=file.stat.mtime,size=file.stat.size,epoch=this.invalidated.get(path)||0;
@@ -181,7 +183,7 @@ class SearchIndex {
       if(Date.now()-started>=8) {await this.yieldTask();started=Date.now();}
     }
     report();
-    return {matches,errors,storageError,cancelled:cancelled()};
+    return {matches,errors,storageError:storageError || !this.storageAvailable,cancelled:cancelled() || this.closed};
   }
 }
 
