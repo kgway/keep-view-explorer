@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.44.5 — restore saved search results
+
+- Automatically reapply saved full-text queries when their view becomes visible, preserving metadata filters.
+- Restore results without opening or updating persistent search storage; only explicit searches update it.
+- Keep the current query visible after deleting or disabling the search cache.
+- Defer restored full-text searches while views are hidden or detached.
+- Update a development URI parser patch and move artifact uploads to the Node.js 24 action.
+
 ## 1.44.4 — cache type-check compatibility
 
 - Validate stored path arrays with an explicit type predicate instead of an unnecessary assertion under newer TypeScript versions.

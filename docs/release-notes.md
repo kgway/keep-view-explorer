@@ -1,5 +1,13 @@
 # Keep View Explorer
 
+## Changes in 1.44.5
+
+- Reopen saved views with their search results, without requiring another search submission.
+- Reapply the saved query and other filters when the view becomes visible; hidden views wait.
+- Restore results directly from current notes without opening or updating persistent search storage.
+- Keep query results visible after deleting or disabling the cache; only explicit Search rebuilds it.
+- Update compatible development tooling and CI artifact uploads.
+
 ## Changes in 1.44.4
 
 - Resolve the newer-TypeScript review warning about an unnecessary assertion in search-cache path validation.

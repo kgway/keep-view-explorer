@@ -19,6 +19,7 @@ jobs:
   attest:
     if: github.repository == 'kgway/keep-view-explorer' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
@@ -47,7 +48,7 @@ jobs:
             dist/keep-view/main.js
             dist/keep-view/manifest.json
             dist/keep-view/styles.css
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: keep-view-attested-candidate
           path: dist/keep-view/

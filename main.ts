@@ -162,7 +162,6 @@ const dateGuidanceShown=callbacks.dateGuidanceShown || new Set( ([] as string[])
 const cardSearch=new CardSearch(app,{index:searchIndex,yieldTask:()=>new Promise((resolve)=>window.setTimeout(resolve,0))});
 
 let searchState: SearchState={key:null,ready:true,matches:new Set(),errors:[]};
-let searchActivated=false;
 let updateSearchCache=false;
 let deferTreeCards=false;let treeCardTimer: number|null=null;
 const treeCardQueue= ([] as (()=>boolean)[]);
@@ -1500,7 +1499,11 @@ const topFolder=(path: string)=>path.includes('/')?path.split('/')[0]:'';
 
 const ensureSearch=()=>{
   const query=normalizeSearch(S.textQuery.trim());
-  if(query && !searchActivated) {searchState.ready=false;searchState.waiting=true;return;}
+  if(query && (document.hidden || container.clientWidth===0 || container.isConnected===false)) {
+    cardSearch.cancel();
+    searchState={key:null,ready:false,matches:new Set(),errors:[],waiting:true};
+    pendingRefresh=true;forceRefresh=true;return;
+  }
   const ordered=sortArr(candidatePages());
   if(S.groupByFolder) ordered.sort((a,b)=>{
     const left=topFolder(a.file.path),right=topFolder(b.file.path);
@@ -1791,7 +1794,7 @@ const render = () => {
   searchButton.onclick=()=>{
     searchModal?.close();
     searchModal=new TextSearchModal(app,S.textQuery,(value)=>{
-      pushUndo();S.textQuery=value;S.limit=PAGE_SIZE;searchActivated=true;updateSearchCache=!!value;searchState.key=null;render();
+      pushUndo();S.textQuery=value;S.limit=PAGE_SIZE;updateSearchCache=!!value;searchState.key=null;render();
     });
     searchModal.open();
   };
@@ -1966,7 +1969,7 @@ const render = () => {
    let status: HTMLElement|null=null;
   if(searching) {
     status=statusSlot!.createDiv({cls:'kv-search-status'});status.setAttribute('role','status');
-    status.createDiv({text:searchState.waiting?msg("全文検索ボタンから検索を再開してください"):msg("検索中… {0} / {1} 件", [searchState.completed, searchState.total])});
+    status.createDiv({text:searchState.waiting?msg("ビューを開くと検索を再開します"):msg("検索中… {0} / {1} 件", [searchState.completed, searchState.total])});
     status.createDiv({cls:'kv-search-hint',text:searchState.slow?msg("初回・更新時は時間がかかる場合があります"):''});
   }
   const bodyEl= (root.createDiv({cls:'kv-body-wrapper'}) as CardBody);
@@ -2059,7 +2062,7 @@ const render = () => {
 render();
 return {
 
-  setSearchIndex(index: SearchIndex|null,{pause=false}: {pause?:boolean}={}) {if(cardSearch.index===index && !pause) return;cardSearch.clear();cardSearch.index=index;if(pause) {searchActivated=false;updateSearchCache=false;}searchState.key=null;forceRefresh=true;refreshLater();},
+  setSearchIndex(index: SearchIndex|null,{pause=false}: {pause?:boolean}={}) {if(cardSearch.index===index && !pause) return;cardSearch.clear();cardSearch.index=index;if(pause) updateSearchCache=false;searchState.key=null;forceRefresh=true;refreshLater();},
 
   refresh(file?: TAbstractFile) { if(file?.path) {forceRefresh=file.path.toLowerCase().endsWith('.md') || forceRefresh;cardSearch.invalidate(file.path);if(searchState.files?.has(file.path)) {cardSearch.cancel();searchState.key=null;}} revision++; pagesCache=null; S.tagCache = null; refreshLater(); },
   refreshSettings() {forceRefresh=true;revision++;pagesCache=null;S.tagCache=null;refreshLater();},
