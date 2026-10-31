@@ -85,7 +85,7 @@
   "クリア": "Clear",
   "{0} 件": "{0} notes",
   "{0}: Vault 全体で {1} 件が未設定または無効。並び替えと期間指定にはファイル作成日時を使います。": "{0}: {1} notes have missing or invalid dates. Sorting and date ranges use file creation time for these notes.",
-  "全文検索ボタンから検索を再開してください": "Resume from the full-text search button",
+  "ビューを開くと検索を再開します": "Search resumes when this view becomes visible",
   "{0} 件を読み込めませんでした。全文検索を開き直して検索すると再試行します。": "Could not read {0} notes. Open full-text search and search again to retry.",
   "トップへ戻る": "Back to top",
   "{0} 件のノートを削除しますか？": "Delete {0} notes?",
