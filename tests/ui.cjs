@@ -805,16 +805,16 @@ const screenshots=path.join(root,'.artifacts','ui');fs.mkdirSync(screenshots,{re
     assert.equal(await page.evaluate(()=>liveComponents),0,'Deletion previews release render components');
     await page.evaluate(()=>{
       const files=['Notes/one.md','Notes/two.md','Other/three.md'].map((path,i)=>({path,basename:path.split('/').pop().slice(0,-3),parent:{path:path.split('/')[0]},stat:{mtime:1,size:30,ctime:1},i}));
-      const disk=new Map(),paths=new Map();window.indexNoteReads=0;window.indexWrites=0;window.indexStorageReads=0;
+      const disk=new Map(),paths=new Map();window.indexNoteReads=0;window.indexMissReads=0;window.indexWrites=0;window.indexStorageReads=0;
       window.indexStorage={read:async id=>{indexStorageReads++;return disk.get(id)||null;},paths:async id=>paths.get(id)||[],write:async(id,bytes,names)=>{indexWrites++;disk.set(id,bytes);paths.set(id,names);},clear:async()=>{disk.clear();paths.clear();},close(){}};
       window.indexDisk=disk;
-      window.indexApp={vault:{getMarkdownFiles:()=>files,getAbstractFileByPath:path=>files.find(file=>file.path===path),cachedRead:async file=>{indexNoteReads++;return ['買い物 needle','別の本文','その他'][file.i];},adapter:{exists:async path=>disk.has(path),mkdir:async path=>disk.set(path,null),readBinary:async path=>disk.get(path),writeBinary:async(path,data)=>disk.set(path,data)}},metadataCache:{getFileCache:()=>({tags:[],frontmatter:{created:new Date().toISOString()}}),getFirstLinkpathDest:()=>null},workspace:{getLeaf:()=>({openFile(){}})}};
+      window.indexApp={vault:{getMarkdownFiles:()=>files,getAbstractFileByPath:path=>files.find(file=>file.path===path),cachedRead:async file=>{indexNoteReads++;if(file.i===1) indexMissReads++;return ['買い物 needle','別の本文','その他'][file.i];},adapter:{exists:async path=>disk.has(path),mkdir:async path=>disk.set(path,null),readBinary:async path=>disk.get(path),writeBinary:async(path,data)=>disk.set(path,data)}},metadataCache:{getFileCache:()=>({tags:[],frontmatter:{created:new Date().toISOString()}}),getFirstLinkpathDest:()=>null},workspace:{getLeaf:()=>({openFile(){}})}};
       window.indexSaved={textQuery:'needle',folderFilters:['Notes'],sortField:'name',sortOrder:'asc'};
-      window.mountIndexed=(attached=true)=>{
+      window.mountIndexed=(attached=true,reuseIndex=false)=>{
         document.getElementById('view').empty();
         window.indexMountEl=document.createElement('div');
         if(attached)document.getElementById('view').append(indexMountEl);
-        window.indexCurrent=new SearchIndex(indexApp,'cache',{storage:indexStorage});
+        if(!reuseIndex) window.indexCurrent=new SearchIndex(indexApp,'cache',{storage:indexStorage});
         window.indexController=mountKeepView(indexApp,indexMountEl,indexSaved,state=>window.indexSaved=state,currentSettings,indexCurrent);
       };
       mountIndexed();
@@ -825,15 +825,19 @@ const screenshots=path.join(root,'.artifacts','ui');fs.mkdirSync(screenshots,{re
     assert.equal(await page.evaluate(()=>indexSaved.textQuery),'needle');
     assert.deepEqual(await page.evaluate(()=>indexSaved.folderFilters),['Notes']);
     assert.ok(await page.evaluate(()=>indexNoteReads>0),'Restored search reads the current candidate notes');
-    assert.equal(await page.evaluate(()=>indexStorageReads),0,'Restoration does not open persisted search bodies');
     assert.equal(await page.evaluate(()=>indexWrites),0,'Restoration never builds a persistent cache');
     await search('needle');
     assert.equal(await page.locator('.kv-card').count(),1);
     const restoreWrites=await page.evaluate(()=>indexWrites),restoreStorageReads=await page.evaluate(()=>indexStorageReads);
-    await page.evaluate(()=>{indexController.dispose();window.indexNoteReads=0;mountIndexed();});
+    await page.evaluate(()=>{indexController.dispose();window.indexMissReads=0;mountIndexed(true,true);});
+    await waitRestoredSearch();
+    assert.equal(await page.evaluate(()=>indexMissReads),0,'Returning to the view reuses the shared in-memory decisions');
+    assert.equal(await page.evaluate(()=>indexStorageReads),restoreStorageReads,'Warm restoration does not load a bucket');
+    await page.evaluate(()=>{indexController.dispose();window.indexMissReads=0;mountIndexed();});
     await waitRestoredSearch();
     assert.equal(await page.evaluate(()=>indexWrites),restoreWrites,'Reopening an indexed search does not change stored bodies');
-    assert.equal(await page.evaluate(()=>indexStorageReads),restoreStorageReads,'Reopening also avoids database reads');
+    assert.ok(await page.evaluate(before=>indexStorageReads>before,restoreStorageReads),'A fresh index reads the saved buckets');
+    assert.equal(await page.evaluate(()=>indexMissReads),0,'Cold restoration does not read indexed non-matches from the vault');
     await page.evaluate(()=>{window.indexNoteReads=0;});
     await search('absent');
     assert.equal(await page.locator('.kv-card').count(),0);
@@ -899,7 +903,8 @@ const screenshots=path.join(root,'.artifacts','ui');fs.mkdirSync(screenshots,{re
       window.advanceSearch=null;
       const files=['A/0.md','A/1.md','B/2.md','B/3.md','4.md','5.md'].map((path,i)=>({path,basename:String(i),parent:{path:path.includes('/')?path[0]:'/'},stat:{mtime:1,size:30,ctime:1},i}));
       const app={vault:{getName:()=> 'Progress test',getMarkdownFiles:()=>files,getAbstractFileByPath:path=>files.find(file=>file.path===path),cachedRead:async file=>'needle 本文です。\n'.repeat(file.i+1)},metadataCache:{getFileCache:()=>({tags:[],frontmatter:{created:'2026-01-01T00:00:00Z'}}),getFirstLinkpathDest:()=>null},workspace:{getLeaf:()=>({openFile(){}})}};
-      const controlledIndex={search:async(query,candidates,{onProgress,cancelled})=>{
+      const controlledIndex={search:async(query,candidates,{onProgress,cancelled,updateCache})=>{
+        if(!updateCache) return {matches:new Set(candidates.map(file=>file.path)),errors:[],cancelled:cancelled()};
         const matches=new Set(),settled=new Set();
         window.progressFiles=candidates.map(file=>file.path);
         window.advanceSearch=indices=>{for(const i of indices) {matches.add(candidates[i].path);settled.add(candidates[i].path);}onProgress(settled.size,candidates.length,{matches,settled});};

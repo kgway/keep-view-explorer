@@ -32,7 +32,7 @@ function committed(transaction:IDBTransaction):Promise<void> {
 }
 
 export class IndexedDBSearchStorage implements SearchStorage {
-  private connection:Promise<IDBDatabase>|null=null;
+  private connection:Promise<IDBDatabase|null>|null=null;
   private database:IDBDatabase|null=null;
   private closed=false;
 
@@ -55,20 +55,33 @@ export class IndexedDBSearchStorage implements SearchStorage {
     return PREFIX+id;
   }
 
-  private open():Promise<IDBDatabase> {
-    if(this.closed) return Promise.reject(new Error('Search cache is closed'));
-    if(this.connection) return this.connection;
-    const opening=new Promise<IDBDatabase>((resolve,reject)=>{
-      const name=this.name(true);
-      if(!name) throw new Error('Search cache namespace unavailable');
+  private async open(create:boolean):Promise<IDBDatabase|null> {
+    if(this.closed) throw new Error('Search cache is closed');
+    if(this.connection) {
+      const db=await this.connection;
+      if(db || !create) return db;
+      return this.open(true);
+    }
+    const name=this.name(create);
+    if(!name) return null;
+    const opening=new Promise<IDBDatabase|null>((resolve,reject)=>{
       const request=indexedDB.open(name,1);
-      let expired=false;
+      let expired=false,missing=false;
       const timer=window.setTimeout(()=>{expired=true;reject(new Error('Search cache open timed out'));},3000);
       request.onupgradeneeded=()=>{
+        if(!create || expired || this.closed) {
+          missing=!create;
+          request.transaction?.abort();
+          return;
+        }
         const db=request.result;
         db.createObjectStore('buckets');db.createObjectStore('paths');
       };
-      request.onerror=()=>{window.clearTimeout(timer);reject(request.error || new Error('Search cache open failed'));};
+      request.onerror=()=>{
+        window.clearTimeout(timer);
+        if(missing) resolve(null);
+        else reject(request.error || new Error('Search cache open failed'));
+      };
       request.onblocked=()=>{window.clearTimeout(timer);expired=true;reject(new Error('Search cache open blocked'));};
       request.onsuccess=()=>{
         window.clearTimeout(timer);
@@ -80,13 +93,17 @@ export class IndexedDBSearchStorage implements SearchStorage {
         resolve(db);
       };
     });
-    this.connection=opening.catch((error:unknown)=>{this.connection=null;throw error;});
+    this.connection=opening.then(db=>{
+      if(!db) this.connection=null;
+      return db;
+    },(error:unknown)=>{this.connection=null;throw error;});
     return this.connection;
   }
 
   async read(id:number):Promise<Uint8Array|null> {
     checkBucket(id);
-    const db=await this.open();
+    const db=await this.open(false);
+    if(!db) return null;
     const value=await requestValue(db.transaction('buckets','readonly').objectStore('buckets').get(id));
     if(value===undefined) return null;
     if(!(value instanceof ArrayBuffer) || value.byteLength>MAX_BUCKET_BYTES) throw new Error('Invalid search cache bucket');
@@ -95,7 +112,8 @@ export class IndexedDBSearchStorage implements SearchStorage {
 
   async paths(id:number):Promise<string[]> {
     checkBucket(id);
-    const db=await this.open();
+    const db=await this.open(false);
+    if(!db) return [];
     const value=await requestValue(db.transaction('paths','readonly').objectStore('paths').get(id));
     if(value===undefined) return [];
     if(!Array.isArray(value) || !value.every((path:unknown):path is string=>typeof path==='string')) throw new Error('Invalid search cache paths');
@@ -105,7 +123,8 @@ export class IndexedDBSearchStorage implements SearchStorage {
   async write(id:number,bytes:Uint8Array,paths:string[]):Promise<void> {
     checkBucket(id);
     if(bytes.byteLength>MAX_BUCKET_BYTES) throw new Error('Search cache capacity exceeded');
-    const db=await this.open();
+    const db=await this.open(true);
+    if(!db) throw new Error('Search cache namespace unavailable');
     const transaction=db.transaction(['buckets','paths'],'readwrite');
     const done=committed(transaction);
     try {
@@ -118,9 +137,8 @@ export class IndexedDBSearchStorage implements SearchStorage {
   }
 
   async clear():Promise<void> {
-    const name=this.name(false);
-    if(!name) return;
-    const db=await this.open();
+    const db=await this.open(false);
+    if(!db) return;
     const transaction=db.transaction(['buckets','paths'],'readwrite');
     const done=committed(transaction);
     transaction.objectStore('buckets').clear();transaction.objectStore('paths').clear();

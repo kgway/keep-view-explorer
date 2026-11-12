@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.44.6 — reuse the search index when reopening
+
+- Reuse in-memory decisions and saved index entries when restoring a full-text search.
+- Read current notes for stale or missing entries. Persistent cache updates still require an explicit search.
+
 ## 1.44.5 — restore saved search results
 
 - Automatically reapply saved full-text queries when their view becomes visible, preserving metadata filters.

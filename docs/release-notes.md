@@ -1,5 +1,10 @@
 # Keep View Explorer
 
+## Changes in 1.44.6
+
+- Reuse valid search cache entries when reopening a saved search.
+- Check changed or uncached notes against their current contents. Press Search to update the saved cache.
+
 ## Changes in 1.44.5
 
 - Reopen saved views with their search results, without requiring another search submission.

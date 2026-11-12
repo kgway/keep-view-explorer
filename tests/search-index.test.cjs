@@ -31,18 +31,32 @@ test('persisted index is lazy and supports literal Japanese, punctuation, NFC an
   assert.equal(f.reads.length,0);assert.equal(f.writes.length,0);
 });
 
-test('passive searches and invalidation never open, update or clean persistent storage',async()=>{
-  const f=fixture(['hit','miss']),index=f.open(),engine=new CardSearch(f.app,{index});
+test('restoration reuses warm decisions and cold saved bodies without updating or cleaning storage',async()=>{
+  const f=fixture(['hit','miss','hit']),index=f.open(),engine=new CardSearch(f.app,{index});
   f.legacy.set('cache/0.gz','old');
-  await engine.search('hit',f.files);
-  assert.equal(f.disk.size,0);assert.equal(f.loads.length,0);assert.equal(f.removed.length,0);
-  await engine.search('hit',f.files,{updateCache:true});
-  const before=f.writes.length;f.texts[0]='new';engine.invalidate('0.md');
-  assert.equal((await engine.search('new',f.files)).matches.size,1);
-  assert.equal(f.writes.length,before);
+  await engine.search('hit',f.files.slice(0,2));
+  assert.equal(f.disk.size,0);assert.equal(f.removed.length,0);
+  await engine.search('hit',f.files.slice(0,2),{updateCache:true});
+  assert.ok(f.writes.length>0,'The same explicit search must persist previously uncached notes');
+  f.legacy.set('cache/1.gz','resynced');
+  f.reads.length=f.loads.length=f.writes.length=f.removed.length=0;
+  const originalPaths=f.storage.paths;
+  let metadataReads=0;
+  f.storage.paths=async id=>{metadataReads++;return originalPaths(id);};
+  const warm=new CardSearch(f.app,{index});
+  assert.deepEqual([...(await warm.search('hit',f.files.slice(0,2))).matches],['0.md']);
+  assert.equal(f.reads.length,0);assert.equal(f.loads.length,0);
+  const reopened=new CardSearch(f.app,{index:f.open()});
+  assert.deepEqual([...(await reopened.search('hit',f.files.slice(0,2))).matches],['0.md']);
+  assert.equal(f.reads.length,0);assert.ok(f.loads.length>0);
+  f.texts[0]='new';reopened.invalidate('0.md');
+  assert.deepEqual([...(await reopened.search('hit',f.files)).matches],['2.md']);
+  assert.deepEqual(f.reads.sort(),['0.md','2.md'],'Only changed and uncached notes are read');
+  assert.equal(f.writes.length,0);assert.equal(metadataReads,0);assert.equal(f.removed.length,0);
   assert.equal((await decodeBucket(f.disk.get(bucketFor('0.md')))).entries.find(([path])=>path==='0.md')[1].text,'hit');
-  await engine.search('new',f.files,{updateCache:true});
-  assert.ok(f.writes.length>before);
+  await reopened.search('hit',f.files,{updateCache:true});
+  assert.ok(f.writes.length>0);
+  assert.equal((await decodeBucket(f.disk.get(bucketFor('0.md')))).entries.find(([path])=>path==='0.md')[1].text,'new');
 });
 
 test('only candidates are indexed; same-time and same-size edits update their own bucket on explicit search',async()=>{

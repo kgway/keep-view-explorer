@@ -26,7 +26,7 @@ class SearchIndex {
   declare revision: number;
   declare tail: Promise<unknown>;
   declare query: string;
-  declare results: Map<string, CachedMatch>;
+  declare results: Map<string, CachedMatch & {indexed:boolean}>;
   private storage:SearchStorage;
   private storageAvailable=true;
   private closed=false;
@@ -36,7 +36,7 @@ class SearchIndex {
   constructor(app: App,directory: string,{yieldTask=()=>new Promise((resolve)=>(typeof window==='undefined'?setTimeout:window.setTimeout)(resolve,0)),memoryLimit=12*1024*1024,storage=new IndexedDBSearchStorage(app)}: {yieldTask?:()=>Promise<void>,memoryLimit?:number,storage?:SearchStorage}={}) {
     this.app=app;this.directory=directory;this.yieldTask=yieldTask;this.memoryLimit=memoryLimit;
     this.buckets= (new Map() as Map<number,Bucket>);this.invalidated= (new Map() as Map<string,number>);this.revision=0;this.tail= (Promise.resolve());
-    this.query='';this.results= (new Map() as Map<string,CachedMatch>);
+    this.query='';this.results=new Map();
     this.storage=storage;
   }
 
@@ -47,8 +47,8 @@ class SearchIndex {
     return !!file && 'stat' in file;
   }
 
-  search(query: string,files: TFile[],{cancelled=()=>false,onProgress=()=>{}}: {cancelled?:()=>boolean,onProgress?:ProgressCallback}={}) {
-    const result=this.tail.then(()=>this.run(query,files,{cancelled,onProgress}));
+  search(query: string,files: TFile[],{cancelled=()=>false,onProgress=()=>{},updateCache=true}: {cancelled?:()=>boolean,onProgress?:ProgressCallback,updateCache?:boolean}={}) {
+    const result=this.tail.then(()=>this.run(query,files,{cancelled,onProgress,updateCache}));
     this.tail=result.catch(()=>{});
     return result;
   }
@@ -128,17 +128,19 @@ class SearchIndex {
     bucket.dirty=false;
   }
 
-  async run(query: string,files: TFile[],{cancelled,onProgress}: {cancelled:()=>boolean,onProgress:ProgressCallback}): Promise<SearchResult> {
+  async run(query: string,files: TFile[],{cancelled,onProgress,updateCache}: {cancelled:()=>boolean,onProgress:ProgressCallback,updateCache:boolean}): Promise<SearchResult> {
     const matches=new Set( ([] as string[])),settled=new Set( ([] as string[])),errors= ([] as string[]),groups= (new Map() as Map<number,TFile[]>);let completed=0,storageError=false;
     if(this.closed || cancelled()) return {matches,errors,cancelled:true};
     this.storageAvailable=true;
-    try {await this.prune(cancelled);} catch {this.storageAvailable=false;storageError=true;}
-    try {if(this.storageAvailable && !cancelled()) await this.removeLegacy();} catch {storageError=true;}
+    if(updateCache) {
+      try {await this.prune(cancelled);} catch {this.storageAvailable=false;storageError=true;}
+      try {if(this.storageAvailable && !cancelled()) await this.removeLegacy();} catch {storageError=true;}
+    }
     const report=()=>{if(!cancelled()) onProgress(completed,files.length,{matches,settled});};
     if(query!==this.query) {this.query=query;this.results.clear();}
     for(const file of files) {
       const cached=this.results.get(file.path);
-      if(cached && cached.file===file && cached.mtime===file.stat.mtime && cached.size===file.stat.size) {
+      if(cached && (!updateCache || cached.indexed) && cached.file===file && cached.mtime===file.stat.mtime && cached.size===file.stat.size) {
         if(cached.match) matches.add(file.path);
         settled.add(file.path);
         completed++;continue;
@@ -150,40 +152,50 @@ class SearchIndex {
     report();
     let started=Date.now();
     for(const [id,candidates] of groups) {
-      if(cancelled()) break;
+      if(cancelled() || this.closed) break;
       const bucket=await this.load(id);
-      for(const path of bucket.entries.keys()) if(!this.present(path)) {bucket.entries.delete(path);this.invalidated.delete(path);bucket.dirty=true;}
+      if(updateCache) for(const path of bucket.entries.keys()) if(!this.present(path)) {bucket.entries.delete(path);this.invalidated.delete(path);bucket.dirty=true;}
       for(const file of candidates) {
-        if(cancelled()) break;
+        if(cancelled() || this.closed) break;
         const path=file.path,mtime=file.stat.mtime,size=file.stat.size,epoch=this.invalidated.get(path)||0;
         try {
-          let entry=bucket.entries.get(path);
-          if(!entry || entry.mtime!==mtime || entry.size!==size || entry.epoch!==epoch) {
+          const entry=bucket.entries.get(path);
+          const valid=entry!==undefined && entry.mtime===mtime && entry.size===size && entry.epoch===epoch;
+          let match=normalize(file.basename).includes(query);
+          if(valid) match=match || entry.text.includes(query);
+          else if(updateCache || !match) {
             const text=normalize(await this.app.vault.cachedRead(file));
+            if(cancelled() || this.closed) break;
             if(file.path!==path || file.stat.mtime!==mtime || file.stat.size!==size || (this.invalidated.get(path)||0)!==epoch || this.app.vault.getAbstractFileByPath(path)!==file) throw Error('Note changed during indexing');
-            entry={mtime,size,text,epoch};bucket.entries.set(path,entry);bucket.dirty=true;
+            if(updateCache) {bucket.entries.set(path,{mtime,size,text,epoch});bucket.dirty=true;}
+            match=match || text.includes(query);
           }
-          const match=normalize(file.basename).includes(query) || entry.text.includes(query);
           if(match) matches.add(path);
           const oldest=this.results.keys().next();
           const oldestPath= (oldest.value as unknown);
           if(this.results.size>=10000 && typeof oldestPath==='string') this.results.delete(oldestPath);
-          this.results.set(path,{file,mtime,size,match});
-        } catch {bucket.entries.delete(path);bucket.dirty=true;errors.push(path);}
+          // A decision from an uncached note must not skip the next explicit update.
+          this.results.set(path,{file,mtime,size,match,indexed:updateCache || (valid && !bucket.dirty)});
+        } catch {
+          if(updateCache) {bucket.entries.delete(path);bucket.dirty=true;}
+          errors.push(path);
+        }
         completed++;
         settled.add(path);
         if(Date.now()-started>=8) {report();await this.yieldTask();started=Date.now();}
       }
-      try {await this.save(id,bucket);} catch {
-        storageError=true;
-        for(const path of bucket.entries.keys()) this.results.delete(path);
+      if(updateCache) {
+        try {await this.save(id,bucket);} catch {
+          storageError=true;
+          for(const path of bucket.entries.keys()) this.results.delete(path);
+        }
+        bucket.bytes=[...bucket.entries].reduce((sum,[path,entry])=>sum+entry.text.length*2+path.length*2+128,0);
       }
-      bucket.bytes=[...bucket.entries].reduce((sum,[path,entry])=>sum+entry.text.length*2+path.length*2+128,0);
       this.trim();report();
       if(Date.now()-started>=8) {await this.yieldTask();started=Date.now();}
     }
     report();
-    return {matches,errors,storageError:storageError || !this.storageAvailable,cancelled:cancelled() || this.closed};
+    return {matches,errors,storageError:updateCache && (storageError || !this.storageAvailable),cancelled:cancelled() || this.closed};
   }
 }
 
