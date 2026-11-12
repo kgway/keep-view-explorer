@@ -48,6 +48,16 @@ async function testSearchStorage(browser) {
       sameStore.close();
       const other=new CacheStorageSource.IndexedDBSearchStorage(makeApp(localB));
       check(await other.read(id)===null,'Different vaults must not share cache content');
+      const missingName='keep-view/search-cache/'+'b'.repeat(32);
+      localB.set('keep-view-search-cache-id','b'.repeat(32));
+      check(await other.read(id)===null,'A saved namespace may point to a database removed by the device');
+      check(!(await indexedDB.databases()).some(db=>db.name===missingName),'Reading a missing database must not create it');
+      const coldIndex=new CacheIndexSource.SearchIndex(app,'cache',{yieldTask:async()=>{}});
+      const coldEngine=new CacheSearchSource.CardSearch(app,{index:coldIndex});
+      const beforeRestore=noteReads;
+      check((await coldEngine.search('買',files)).matches.has('0.md'),'A fresh index must restore the saved search');
+      check(noteReads===beforeRestore,'Restoring from an existing database must avoid source-note reads');
+      coldIndex.close();
       const saved=noteReads;await index.search('😀',files);check(noteReads===saved,'Unchanged notes must be restored from IndexedDB');
       sources[0]='different';files[0].stat.mtime++;engine.invalidate('0.md');
       await engine.search('different',files);

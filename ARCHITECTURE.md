@@ -9,7 +9,7 @@
 - `lib/note-operations.ts`: note creation, tag changes/history, file/folder moves and deletion. Receives the Obsidian app explicitly and returns reports; no DOM or selection UI.
 - `lib/note-opening.ts`: opens a note with explicit foreground activation, awaits file loading, then reveals that same tab. Shared by card taps and both creation buttons; does not change host preferences.
 - `lib/card-search.ts`: literal substring matching over metadata-filtered candidates. Cancels superseded runs and delegates to the shared persistent index. A scan-only fallback supports callers without a storage adapter.
-- `lib/search-index.ts`: lazy compressed search storage, exact substring matching, per-note invalidation and bounded bucket retention. Serializes updates across views; never scans at startup.
+- `lib/search-index.ts`: lazy compressed search storage, exact substring matching, per-note invalidation and bounded bucket retention. Serializes searches across views and reuses the cache in read-only mode for restored queries.
 - `lib/search-codec.ts`: versioned payloads using standard asynchronous Compression Streams, optional Unicode character dictionaries and legacy format decoding. No filesystem access or view state.
 - `styles.css`: scoped component styles and responsive layout. Checkbox geometry is defined once under `.kv-dropdown-checkbox`, independent of theme checkmark dimensions.
 

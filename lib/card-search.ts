@@ -32,7 +32,7 @@ class CardSearch {
     const work=async()=>{
       const matches=new Set( ([] as string[])),settled=new Set( ([] as string[])),errors= ([] as string[]);
       if(cancelled()) return {matches,errors,cancelled:true};
-      if(this.index && updateCache) return this.index.search(query,files,{cancelled,onProgress});
+      if(this.index) return this.index.search(query,files,{cancelled,onProgress,updateCache});
       if(query!==this.query) {this.query=query;this.cache.clear();}
       let next=0,completed=0;
       await Promise.all(Array.from({length:Math.min(4,files.length)},async()=>{
